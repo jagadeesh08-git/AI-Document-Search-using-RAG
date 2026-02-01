@@ -8,7 +8,7 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import FakeEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 
 
 # ================= PAGE SETUP =================
@@ -16,10 +16,8 @@ st.set_page_config(page_title="AI Document Search using RAG", layout="centered")
 st.title("📄 AI Document Search using RAG")
 
 st.markdown("""
-**Supported files:** PDF, TXT, CSV  
-🔍 Document-based question suggestions (multi-document aware)  
-⚡ Optimized for low-RAM systems  
-🧠 Answers are generated **strictly from uploaded documents**
+Upload documents and ask questions.  
+Answers are generated **strictly from the uploaded documents**.
 """)
 
 
@@ -37,9 +35,10 @@ for k, v in defaults.items():
 
 # ================= HELPERS =================
 def save_uploaded_file(file):
-    data = file.getvalue()  # SAFE: read once
+    data = file.getvalue()
     if not data:
         return None
+
     suffix = "." + file.name.split(".")[-1].lower()
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(data)
@@ -53,7 +52,7 @@ if st.button("🧹 Clear Chat"):
     st.session_state.fill_query = ""
     st.session_state.suggestions.clear()
     st.cache_resource.clear()
-    st.success("Chat and suggestions cleared")
+    st.success("Chat cleared")
     st.rerun()
 
 
@@ -76,6 +75,7 @@ if current_files != st.session_state.last_uploaded_files:
 # ================= LOAD DOCUMENTS =================
 def load_documents(files):
     documents = []
+
     for file in files:
         path = save_uploaded_file(file)
         if not path:
@@ -104,15 +104,23 @@ def load_documents(files):
 def build_vector_db(files):
     docs = load_documents(files)
 
+    if not docs:
+        raise ValueError("No readable text found in uploaded documents.")
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=400,
         chunk_overlap=40
     )
     chunks = splitter.split_documents(docs)
 
-    embeddings = FakeEmbeddings(size=384)
-    db = Chroma.from_documents(chunks, embeddings)
+    if not chunks:
+        raise ValueError("Document splitting produced no chunks.")
 
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
+    db = Chroma.from_documents(chunks, embeddings)
     return db
 
 
@@ -124,14 +132,13 @@ def load_llm():
     return tokenizer, model
 
 
-# ================= SUGGESTIONS (BALANCED PER DOC) =================
+# ================= SUGGESTIONS (PER DOCUMENT) =================
 def generate_suggestions_with_sources(files, max_per_doc=3):
     QUESTION_TEMPLATES = [
         "Explain the concept of {} in detail.",
         "How does {} work in practical applications?",
         "What are the main steps involved in {}?",
-        "Why is {} important in real-world systems?",
-        "Discuss the advantages and limitations of {}."
+        "Why is {} important?",
     ]
 
     suggestions = []
@@ -160,7 +167,7 @@ def generate_suggestions_with_sources(files, max_per_doc=3):
 
         text = " ".join(d.page_content for d in docs)
         words = re.findall(r"\b[a-zA-Z]{6,}\b", text.lower())
-        keywords = [w for w, _ in Counter(words).most_common(6)]
+        keywords = [w for w, _ in Counter(words).most_common(5)]
 
         count = 0
         for kw in keywords:
@@ -183,8 +190,12 @@ def generate_suggestions_with_sources(files, max_per_doc=3):
 # ================= PROCESS FILES =================
 if uploaded_files:
     with st.spinner("Indexing documents..."):
-        vector_db = build_vector_db(uploaded_files)
-        retriever = vector_db.as_retriever(search_kwargs={"k": 4})
+        try:
+            vector_db = build_vector_db(uploaded_files)
+            retriever = vector_db.as_retriever(search_kwargs={"k": 4})
+        except Exception as e:
+            st.error(str(e))
+            st.stop()
 
     if not st.session_state.suggestions:
         st.session_state.suggestions = generate_suggestions_with_sources(uploaded_files)
@@ -212,12 +223,12 @@ query = query.strip()
 
 # ================= SHOW SUGGESTIONS =================
 if uploaded_files and st.session_state.suggestions and query == "":
-    st.markdown("💡 **Suggested Questions (with source)**")
+    st.markdown("💡 **Suggested Questions**")
 
     for s in st.session_state.suggestions:
         col_q, col_s = st.columns([4, 2])
         with col_q:
-            if st.button(s["question"]):
+            if st.button(s["question"], key=s["question"] + s["source"]):
                 st.session_state.fill_query = s["question"]
                 st.rerun()
         with col_s:
@@ -232,11 +243,11 @@ def ask_ai(docs, question):
         return "Information not found in the uploaded documents."
 
     prompt = f"""
-Use ONLY the context below.
+Answer using ONLY the context below.
 
 FORMAT:
-- One short paragraph (max 3 lines)
-- Exactly 4 bullet points (•)
+- One short paragraph
+- 4 bullet points
 
 Context:
 {context}
