@@ -4,20 +4,14 @@ langchain==1.2.7
 langchain-community==0.4.1
 langchain-text-splitters==1.1.0
 
-chromadb==1.4.1
+chromadb==0.5.0
 
 transformers==4.41.2
-sentence-transformers==5.2.2
+sentence-transformers==2.7.0
 huggingface-hub>=0.23.0
 
-torch>=2.0.0
+torch==2.1.2
 
 pandas>=2.0.0
 numpy>=1.23.0
 pypdf>=6.0.0
-
-
-# PDF support
-pypdf>=4.0.0
-
-
