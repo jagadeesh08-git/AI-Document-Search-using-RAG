@@ -47,10 +47,9 @@ You can upload one or multiple documents at the same time.
 
 ---
 
+
 ## 📦 Installation
 
 ### Clone the repository
-```bash
-git clone https://github.com/<your-username>/AI-Document-Search-using-RAG.git
-cd AI-Document-Search-using-RAG
+https://ai-document-search-using-rag-6uatemasbkngub4q4x2jnc.streamlit.app/
 
