@@ -6,9 +6,6 @@ from collections import Counter
 
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import FakeEmbeddings
 
 
 # ================= PAGE SETUP =================
@@ -17,25 +14,30 @@ st.title("📄 AI Document Search using RAG")
 
 st.markdown("""
 Upload documents and ask questions.  
-Answers are generated **strictly from the uploaded documents**.
+Answers are generated **strictly from the uploaded documents** using a lightweight RAG pipeline.
 """)
 
 
 # ================= SESSION STATE =================
-for k, v in {
+defaults = {
+    "documents": [],
     "chat_history": [],
     "fill_query": "",
-    "last_uploaded_files": None,
-    "suggestions": []
-}.items():
-    st.session_state.setdefault(k, v)
+    "suggestions": [],
+    "last_uploaded_files": None
+}
+
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 
-# ================= FILE SAVE =================
-def save_file(file):
+# ================= HELPERS =================
+def save_uploaded_file(file):
     data = file.getvalue()
     if not data:
         return None
+
     suffix = "." + file.name.split(".")[-1].lower()
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(data)
@@ -43,12 +45,62 @@ def save_file(file):
     return tmp.name
 
 
+def load_documents(files):
+    documents = []
+
+    for file in files:
+        path = save_uploaded_file(file)
+        if not path:
+            continue
+
+        ext = file.name.split(".")[-1].lower()
+        loader = {
+            "pdf": PyPDFLoader,
+            "txt": TextLoader,
+            "csv": CSVLoader
+        }.get(ext)
+
+        if loader:
+            try:
+                docs = loader(path).load()
+                documents.extend(docs)
+            except Exception:
+                pass
+
+        os.remove(path)
+
+    return documents
+
+
+# ================= SIMPLE RETRIEVER (CLOUD SAFE) =================
+def simple_retriever(docs, query, top_k=4):
+    query_words = set(query.lower().split())
+    scored = []
+
+    for d in docs:
+        text = d.page_content.lower()
+        score = sum(1 for w in query_words if w in text)
+        if score > 0:
+            scored.append((score, d))
+
+    scored.sort(reverse=True, key=lambda x: x[0])
+    return [d for _, d in scored[:top_k]]
+
+
+# ================= LLM =================
+@st.cache_resource
+def load_llm():
+    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
+    return tokenizer, model
+
+
 # ================= CLEAR CHAT =================
 if st.button("🧹 Clear Chat"):
     st.session_state.chat_history.clear()
     st.session_state.fill_query = ""
     st.session_state.suggestions.clear()
-    st.cache_resource.clear()
+    st.success("Chat cleared")
     st.rerun()
 
 
@@ -61,115 +113,81 @@ uploaded_files = st.file_uploader(
 
 current_files = tuple(f.name for f in uploaded_files) if uploaded_files else None
 if current_files != st.session_state.last_uploaded_files:
+    st.session_state.documents = []
     st.session_state.chat_history.clear()
     st.session_state.fill_query = ""
     st.session_state.suggestions.clear()
-    st.cache_resource.clear()
     st.session_state.last_uploaded_files = current_files
 
 
-# ================= LOAD DOCUMENTS =================
-def load_documents(files):
-    documents = []
+# ================= PROCESS FILES =================
+if uploaded_files and not st.session_state.documents:
+    with st.spinner("Processing documents..."):
+        st.session_state.documents = load_documents(uploaded_files)
 
-    for f in files:
-        path = save_file(f)
-        if not path:
-            continue
-
-        loader = {
-            "pdf": PyPDFLoader,
-            "txt": TextLoader,
-            "csv": CSVLoader
-        }.get(f.name.split(".")[-1].lower())
-
-        if loader:
-            try:
-                documents.extend(loader(path).load())
-            except Exception:
-                pass
-
-        os.remove(path)
-
-    return documents
+    if not st.session_state.documents:
+        st.error("No readable text found in uploaded documents.")
+        st.stop()
 
 
-# ================= VECTOR DB (SAFE) =================
-@st.cache_resource
-def build_vector_db(files):
-    docs = load_documents(files)
-    if not docs:
-        raise ValueError("No readable content found.")
-
-    splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=40)
-    chunks = splitter.split_documents(docs)
-
-    embeddings = FakeEmbeddings(size=384)
-    return Chroma.from_documents(chunks, embeddings)
-
-
-# ================= LLM =================
-@st.cache_resource
-def load_llm():
-    tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
-    return tokenizer, model
-
-
-# ================= SUGGESTIONS =================
-def generate_suggestions(files):
-    templates = [
+# ================= SUGGESTIONS (PER DOCUMENT) =================
+def generate_suggestions(files, max_per_doc=3):
+    QUESTION_TEMPLATES = [
         "Explain the concept of {} in detail.",
         "How does {} work in practical applications?",
         "What are the main steps involved in {}?",
-        "Why is {} important?"
+        "Why is {} important?",
+        "Discuss the advantages and limitations of {}."
     ]
 
-    results = []
-    for f in files:
-        path = save_file(f)
+    suggestions = []
+
+    for file in files:
+        path = save_uploaded_file(file)
         if not path:
             continue
 
+        ext = file.name.split(".")[-1].lower()
         loader = {
             "pdf": PyPDFLoader,
             "txt": TextLoader,
             "csv": CSVLoader
-        }.get(f.name.split(".")[-1].lower())
+        }.get(ext)
 
         if not loader:
             os.remove(path)
             continue
 
         try:
-            text = " ".join(d.page_content for d in loader(path).load())
+            docs = loader(path).load()
         except Exception:
             os.remove(path)
             continue
 
+        text = " ".join(d.page_content for d in docs)
         words = re.findall(r"\b[a-zA-Z]{6,}\b", text.lower())
-        keywords = [w for w, _ in Counter(words).most_common(3)]
+        keywords = [w for w, _ in Counter(words).most_common(4)]
 
+        count = 0
         for kw in keywords:
-            for t in templates:
-                results.append({
-                    "question": t.format(kw),
-                    "source": f.name
+            for tmpl in QUESTION_TEMPLATES:
+                if count >= max_per_doc:
+                    break
+                suggestions.append({
+                    "question": tmpl.format(kw),
+                    "source": file.name
                 })
+                count += 1
+            if count >= max_per_doc:
+                break
 
         os.remove(path)
 
-    return results
+    return suggestions
 
 
-# ================= PROCESS FILES =================
-if uploaded_files:
-    with st.spinner("Indexing documents..."):
-        vector_db = build_vector_db(uploaded_files)
-        retriever = vector_db.as_retriever(search_kwargs={"k": 4})
-
-    if not st.session_state.suggestions:
-        st.session_state.suggestions = generate_suggestions(uploaded_files)
+if uploaded_files and not st.session_state.suggestions:
+    st.session_state.suggestions = generate_suggestions(uploaded_files)
 
 
 # ================= QUESTION INPUT =================
@@ -180,8 +198,12 @@ query = st.text_input(
 )
 
 col1, col2 = st.columns(2)
-ask_clicked = col1.button("🔎 Ask")
-if col2.button("🧹 Clear Question"):
+with col1:
+    ask_clicked = st.button("🔎 Ask")
+with col2:
+    clear_query = st.button("🧹 Clear Question")
+
+if clear_query:
     st.session_state.fill_query = ""
     st.rerun()
 
@@ -189,20 +211,24 @@ query = query.strip()
 
 
 # ================= SHOW SUGGESTIONS =================
-if uploaded_files and query == "":
+if uploaded_files and st.session_state.suggestions and query == "":
     st.markdown("💡 **Suggested Questions (with source)**")
+
     for s in st.session_state.suggestions:
-        c1, c2 = st.columns([4, 2])
-        if c1.button(s["question"], key=s["question"] + s["source"]):
-            st.session_state.fill_query = s["question"]
-            st.rerun()
-        c2.caption(f"📄 {s['source']}")
+        col_q, col_s = st.columns([4, 2])
+        with col_q:
+            if st.button(s["question"], key=s["question"] + s["source"]):
+                st.session_state.fill_query = s["question"]
+                st.rerun()
+        with col_s:
+            st.caption(f"📄 {s['source']}")
 
 
-# ================= ANSWER =================
+# ================= RAG ANSWER =================
 def ask_ai(docs, question):
     context = " ".join(d.page_content for d in docs)
-    if len(context.strip()) < 30:
+
+    if len(context.strip()) < 40:
         return "Information not found in the uploaded documents."
 
     prompt = f"""
@@ -221,20 +247,23 @@ Question:
 Answer:
 """
 
-    tok, model = load_llm()
-    out = model.generate(**tok(prompt, return_tensors="pt", truncation=True), max_new_tokens=200)
-    return tok.decode(out[0], skip_special_tokens=True)
+    tokenizer, model = load_llm()
+    inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
+    outputs = model.generate(**inputs, max_new_tokens=200)
+
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
 
-# ================= RUN QUERY =================
+# ================= EXECUTE QUERY =================
 if uploaded_files and ask_clicked and len(query.split()) >= 3:
-    docs = retriever.invoke(query)
+    docs = simple_retriever(st.session_state.documents, query)
+
     answer = ask_ai(docs, query)
 
     st.markdown("### 🧠 Answer")
     st.write(answer)
 
-    if "not found" not in answer.lower():
+    if "Information not found" not in answer:
         st.session_state.chat_history.append((query, answer))
 
 
