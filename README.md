@@ -1,55 +1,69 @@
-# 📄 AI Document Search using RAG
+📄 AI Document Search using RAG
 
-An **AI-powered document search application** built using **Streamlit, LangChain, and Transformers**.  
-This project uses **Retrieval-Augmented Generation (RAG)** to answer user questions strictly based on uploaded documents.
+An AI-powered document search and question-answering system built using the Retrieval-Augmented Generation (RAG) paradigm.
+The application allows users to upload documents and ask questions, with answers generated strictly from the uploaded content.
 
----
+🚀 Features
 
-## 🚀 Features
+Upload multiple documents (PDF, TXT, CSV)
 
-- 📂 Upload multiple documents (PDF, TXT, CSV)
-- 🔍 Document-based question suggestions
-- 🧠 Retrieval-Augmented Generation (RAG)
-- ✍️ Clear, structured answers
-- 💬 Chat history tracking
-- 🧹 Clear chat & clear question options
-- 🔒 Answers generated strictly from uploaded documents
-- 📄 Shows which document inspired each suggested question
+Document-based question answering (RAG)
 
----
+Automatic document chunking and retrieval
 
-## 📁 Supported File Types
+AI-generated answers using a transformer model
 
-- PDF (`.pdf`)
-- Text (`.txt`)
-- CSV (`.csv`)
+Document-based question suggestions
 
-You can upload one or multiple documents at the same time.
+Each suggested question shows its source document
 
----
+Chat history with clear/reset options
 
-## 🧠 How It Works
+Clean and interactive Streamlit UI
 
-1. Documents are uploaded by the user  
-2. Text is extracted and split into chunks  
-3. Relevant chunks are retrieved based on the question  
-4. The language model generates an answer using only retrieved content  
+🧠 How It Works (RAG Pipeline)
 
----
+Document Ingestion
+Uploaded documents are loaded and split into smaller text chunks.
 
-## 🛠️ Tech Stack
+Retrieval
+Relevant chunks are retrieved from a vector store based on the user query.
 
-- **Frontend**: Streamlit  
-- **RAG Framework**: LangChain  
-- **Vector Store**: ChromaDB  
-- **Language Model**: Google FLAN-T5  
-- **Embeddings**: FakeEmbeddings  
+Augmentation
+Retrieved content is injected into the prompt as context.
 
----
+Generation
+A transformer-based language model generates answers using only the provided context.
 
+🗂️ Supported File Types
 
+PDF
+
+TXT
+
+CSV
+
+Note: Documents must contain machine-readable text. Scanned or empty files may be ignored.
+
+🛠️ Tech Stack
+
+Frontend: Streamlit
+
+RAG Framework: LangChain
+
+Vector Store: ChromaDB
+
+Language Model: FLAN-T5 (Transformers)
+
+Document Parsing: PyPDF, CSV Loader
 ## 📦 Installation
 
-### Clone the repository
+📦 Installation
+
+Clone the repository:
 https://ai-document-search-using-rag-6uatemasbkngub4q4x2jnc.streamlit.app/
 
+pip install -r requirements.txt
+
+▶️ Run the Application
+streamlit run app.py
