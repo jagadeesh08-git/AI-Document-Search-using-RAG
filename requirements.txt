@@ -1,14 +1,6 @@
 streamlit
+transformers
+torch
+langchain-community
+pypdf
 
-langchain==1.2.7
-langchain-community==0.4.1
-langchain-text-splitters==1.1.0
-
-chromadb==0.5.0
-
-transformers==4.41.2
-huggingface-hub>=0.23.0
-
-pandas>=2.0.0
-numpy>=1.23.0
-pypdf>=6.0.0
